@@ -16,6 +16,8 @@ import {
 import { defaultState, defaultCharacters, defaultHabits, defaultInspirations, defaultUniversalAIMessages } from './initialData';
 import { calculateSleepScore } from '../utils/sleepScoreCalculator';
 import { recallRelevantMemories, formatMemoriesForPrompt } from '../utils/memoryRecallEngine';
+import { chatCompletion } from '../services/aiClient';
+import type { ChatMessage } from '../services/aiClient';
 
 const STORAGE_KEY = 'life_rpg_app_v7_mi_health';
 
@@ -104,6 +106,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!parsed.characters) parsed.characters = defaultCharacters;
         if (!parsed.currentStateScore) parsed.currentStateScore = 8;
         if (!parsed.profile.avatar) parsed.profile.avatar = '✨';
+        // 兼容旧版本存档：补齐 AI 配置字段，避免读取到 undefined 导致设置页崩溃
+        parsed.aiSettings = { ...defaultState.aiSettings, ...(parsed.aiSettings || {}) };
+        if (!Array.isArray(parsed.tomatoPresets) || parsed.tomatoPresets.length === 0) {
+          parsed.tomatoPresets = defaultState.tomatoPresets;
+        }
         return parsed;
       }
     } catch (e) {
@@ -511,9 +518,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const { aiSettings, bandData, tasks, victories, habits, schedules, currentStateScore, profile } = state;
 
+    // 外部 API 失败时保留可读原因，最终随本地回复一起展示给用户（不再静默吞掉）
+    let apiErrorNotice = '';
+
     if (aiSettings.useCustomAPI && aiSettings.apiKey) {
-      try {
-        let roleGuide = `你现在是【全能生活 AI 智能助手与心流中枢】。
+      let roleGuide = `你现在是【全能生活 AI 智能助手与心流中枢】。
 【玩家称呼】：${profile.currentName}
 【身心打分】：${currentStateScore}/10 分
 【小米手环客观生理】：活力指数 ${bandData.vitalityScore}/100，睡眠 ${Math.floor(bandData.sleepTotalMinutes / 60)}h${bandData.sleepTotalMinutes % 60}m(评分${bandData.sleepScore}分)，步数 ${bandData.steps}步，热量 ${bandData.calories}千卡。
@@ -528,25 +537,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           roleGuide += `\n【日常交互准则】：日常聊天与记事请极其利索务实。如果用户完成了事情、提出了愿望或日程，系统后台已经为你自动写入了相应板块，你可以直接给出鼓励、总结或下一步行动建议，不用让用户重复确定。控制在 130 字以内。`;
         }
 
-        const resp = await fetch(`${aiSettings.endpoint}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${aiSettings.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: aiSettings.model || 'deepseek-chat',
-            messages: [
-              { role: 'system', content: roleGuide },
-              { role: 'user', content: userText },
-            ],
-            temperature: 0.7,
-          }),
+        const result = await chatCompletion({
+          settings: aiSettings,
+          messages: [
+            { role: 'system', content: roleGuide },
+            { role: 'user', content: userText },
+          ],
+          temperature: 0.7,
         });
 
-        if (resp.ok) {
-          const data = await resp.json();
-          let aiReply = data.choices?.[0]?.message?.content || '（微笑着注视着你）';
+        if (result.ok) {
+          let aiReply = result.content || '（微笑着注视着你）';
           if (autoWriteFeedback && !aiReply.includes('已自动')) {
             aiReply = `${autoWriteFeedback}\n\n${aiReply}`;
           }
@@ -560,9 +561,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setState((prev) => ({ ...prev, universalAIMessages: [...prev.universalAIMessages, replyMsg] }));
           return;
         }
-      } catch (err) {
-        console.warn(err);
-      }
+
+        // 不再静默回退：把失败原因带到本地回复里，用户能立刻看到为什么「接入没生效」
+        apiErrorNotice = `⚠️ 外部 API 接入失败：${result.error || '未知错误'}`;
     }
 
     // 本地快速响应与自动识别反馈
@@ -587,7 +588,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const replyMsg: UniversalAIMessage = {
         id: `u-${Date.now() + 1}`,
         sender: 'ai',
-        content: reply,
+        content: apiErrorNotice ? `${apiErrorNotice}\n\n（以下为本地引擎回复）\n${reply}` : reply,
         timestamp: nowTime,
         actionTag: isProgramEditCommand ? 'code_edit' : undefined,
       };
@@ -719,7 +720,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const charMemoriesPrompt = formatMemoriesForPrompt(recalledMemories, activeChar.name);
 
     // 滑动窗口拦截机制：只取该角色最近 6 条专属历史消息，绝对隔离不串台，且彻底避免 Tokens 滚雪球
-    const recentHistory = state.messages
+    const recentHistory: ChatMessage[] = state.messages
       .filter((m) => (m.characterId ? m.characterId === activeChar.id : (m.sender === 'user' || m.sender === activeChar.id)))
       .slice(-6)
       .map((m) => ({
@@ -731,6 +732,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nowDate = new Date();
     const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
     const currentRealTime = `${nowDate.getFullYear()}年${nowDate.getMonth() + 1}月${nowDate.getDate()}日 星期${weekdays[nowDate.getDay()]} ${nowDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+
+    // 外部 API 失败原因（用于在气泡里显式提示，避免「接入没生效」却毫无反馈）
+    let apiErrorNotice = '';
 
     if (aiSettings.useCustomAPI && aiSettings.apiKey && activeChar) {
       try {
@@ -745,26 +749,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 【心愿清单】：${wishes.map((w) => w.title).join('、')}。
 【关键时间感知要求】：你拥有真实人类的时间流逝感。每条长效记忆开头均附带了精确记录日期（如 [2026-10-18]）。请结合【当前现实时间】计算出距离现在的相对时间跨度（如：昨天、三天前、上周），并在对话中以自然亲近的口吻呼应（如“前几天你说有些失眠，现在好些了吗”），绝不要把过去的时间误当成今天！控制在 130 字以内。`;
 
-        const resp = await fetch(`${aiSettings.endpoint}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${aiSettings.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: aiSettings.model || 'deepseek-chat',
-            messages: [
-              { role: 'system', content: sysPrompt },
-              ...recentHistory,
-              { role: 'user', content: userText },
-            ],
-            temperature: activeChar.temperature || 0.7,
-          }),
+        const result = await chatCompletion({
+          settings: aiSettings,
+          messages: [
+            { role: 'system', content: sysPrompt },
+            ...recentHistory,
+            { role: 'user', content: userText },
+          ],
+          temperature: activeChar.temperature || 0.7,
         });
 
-        if (resp.ok) {
-          const data = await resp.json();
-          const aiReply = data.choices?.[0]?.message?.content || '（微笑着注视着你）';
+        if (result.ok) {
+          const aiReply = result.content || '（微笑着注视着你）';
           const replyMsg: TavernMessage = {
             id: `m-${Date.now() + 1}`,
             sender: activeChar.id,
@@ -778,8 +774,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           autoExtractAndConsolidateMemory(activeChar.id, userText);
           return;
         }
+
+        apiErrorNotice = `⚠️ 外部 API 接入失败：${result.error || '未知错误'}`;
       } catch (err) {
         console.warn(err);
+        apiErrorNotice = `⚠️ 外部 API 接入失败：${err instanceof Error ? err.message : String(err)}`;
       }
     }
 
@@ -802,7 +801,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `m-${Date.now() + 1}`,
         sender: activeChar ? activeChar.id : 'c-barkeeper',
         characterId: activeChar ? activeChar.id : 'c-barkeeper',
-        content: reply,
+        content: apiErrorNotice ? `${apiErrorNotice}\n\n（以下为本地引擎回复）\n${reply}` : reply,
         timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       };
 
@@ -828,23 +827,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const prompt = `请从下面这句话中，判断是否包含了说话者的个人经历、生活事实、喜好习惯、身体状况或计划。如果有，请提炼成1句极短的客观事实（20字以内，如“喜欢在安静角落喝温燕麦奶”、“正在攻坚某系统核心架构”）。如果只是日常随口闲聊没有实质事实，请只回复“NONE”：\n\n“${text}”`;
 
-        const resp = await fetch(`${aiSettings.endpoint}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${aiSettings.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: aiSettings.model || 'deepseek-chat',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.2,
-            max_tokens: 50,
-          }),
+        const result = await chatCompletion({
+          settings: aiSettings,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+          maxTokens: 50,
         });
 
-        if (resp.ok) {
-          const data = await resp.json();
-          const fact = (data.choices?.[0]?.message?.content || '').trim().replace(/^["“]|["”]$/g, '');
+        if (result.ok) {
+          const fact = (result.content || '').trim().replace(/^["“]|["”]$/g, '');
           if (fact && fact !== 'NONE' && !fact.includes('NONE') && fact.length <= 30) {
             addCharacterMemory(charId, fact);
             return;
@@ -928,22 +919,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const prompt = `请阅读以下对话记录，从${profile.currentName}的话语中，提炼出 1 条关于${profile.currentName}的最核心事实、性格偏好或经历记忆（例如：“探索者最近正在攻坚某系统，喜欢喝温燕麦奶”），必须控制在 25 字以内，只输出这一句话即可：\n\n${charMsgs.map((m) => `${m.sender === 'user' ? profile.currentName : char.name}: ${m.content}`).join('\n')}`;
 
-        const resp = await fetch(`${aiSettings.endpoint}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${aiSettings.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: aiSettings.model || 'deepseek-chat',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.3,
-          }),
+        const result = await chatCompletion({
+          settings: aiSettings,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
         });
 
-        if (resp.ok) {
-          const data = await resp.json();
-          newMemory = (data.choices?.[0]?.message?.content || '').trim().replace(/^["“]|["”]$/g, '');
+        if (result.ok) {
+          newMemory = (result.content || '').trim().replace(/^["“]|["”]$/g, '');
         }
       } catch (e) {
         console.warn('Memory extraction failed', e);
