@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">人生RPG · LifeOS</string>
+    <string name="title_activity_main">人生RPG · LifeOS</string>
+    <string name="package_name">com.liferpg.lifeos</string>
+    <string name="custom_url_scheme">com.liferpg.lifeos</string>
+    <string name="background_notification_title">Measuring your health and fitness data.</string>    <string name="background_notification_description">The app is running in the background.</string>    <string name="privacy_policy_url"/></resources>

@@ -1,0 +1,18 @@
+{
+  "name": "人生RPG · LifeOS",
+  "short_name": "LifeRPG",
+  "description": "个人现实人生 RPG 操作系统：小米手环身体电量、四象限待办、成功日记与异世界心智酒馆",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080d18",
+  "theme_color": "#080d18",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
