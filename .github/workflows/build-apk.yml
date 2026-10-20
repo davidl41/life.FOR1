@@ -19,13 +19,29 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 配置 Gradle 环境与缓存
-        uses: gradle/actions/setup-gradle@v4
+      - name: 配置 Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
 
-      - name: 修复 Linux 脚本权限与换行符
+      # 必须安装依赖，因为 Capacitor 原生插件源码直接位于 node_modules 目录中
+      - name: 安装依赖并构建 Web 产物
         run: |
-          sed -i 's/\r$//' android/gradlew
+          npm install
+          npm run build
+
+      - name: 同步 Capacitor 资源与原生插件
+        run: |
+          npx cap sync android
+
+      - name: 修复 Linux 脚本权限与 CRLF 换行符
+        run: |
+          sed -i -e 's/\r$//' android/gradlew
           chmod +x android/gradlew
+
+      - name: 配置 Gradle 缓存与环境
+        uses: gradle/actions/setup-gradle@v4
 
       - name: 编译 Android Debug APK
         working-directory: ./android
