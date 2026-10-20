@@ -13,14 +13,11 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
-      - name: 配置 Java JDK 17
+      - name: 配置 Java JDK 21 (匹配 Android 最新插件 JVM 21 要求)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
-
-      - name: 配置 Android SDK 环境
-        uses: android-actions/setup-android@v3
+          java-version: '21'
 
       - name: 配置 Node.js 20
         uses: actions/setup-node@v4
@@ -28,7 +25,7 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: 安装依赖并构建前端
+      - name: 安装前端依赖并构建产物
         run: |
           npm install
           npm run build
@@ -37,7 +34,11 @@ jobs:
         run: |
           npx cap sync android
 
-      - name: 修复 Linux 脚本权限与 CRLF 换行符
+      - name: 自动接受 Android SDK 协议
+        run: |
+          yes | sdkmanager --licenses || true
+
+      - name: 修复 Linux 脚本权限与换行符
         run: |
           sed -i -e 's/\r$//' android/gradlew
           chmod +x android/gradlew
@@ -47,7 +48,7 @@ jobs:
         run: |
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: 上传 APK 安装包至产物 (Artifacts)
+      - name: 上传 APK 安装包至 GitHub 产物 (Artifacts)
         uses: actions/upload-artifact@v4
         with:
           name: LifeOS-Android-Debug-APK
