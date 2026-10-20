@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { TavernCharacter } from '../types';
+import { testConnection, normalizeEndpoint, isCleartextEndpoint } from '../services/aiClient';
 import {
   Settings,
   Key,
@@ -106,11 +107,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, defaultTa
   // 备份与恢复
   const [importText, setImportText] = useState('');
 
+  // API 连通性自检
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+
   // 角色编辑 / 新建模态框内状态
   const [editingChar, setEditingChar] = useState<Partial<TavernCharacter> | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [importCharJson, setImportCharJson] = useState('');
   const [showCharImportBox, setShowCharImportBox] = useState(false);
+
+  const handleTestConnection = async () => {
+    if (isTesting) return;
+    if (!apiKey.trim()) {
+      setTestResult({ ok: false, text: '请先填写 API Key' });
+      return;
+    }
+
+    setIsTesting(true);
+    setTestResult(null);
+    const result = await testConnection({
+      useCustomAPI: true,
+      apiKey: apiKey.trim(),
+      endpoint: normalizeEndpoint(endpoint),
+      model: model.trim() || 'deepseek-chat',
+    });
+    setIsTesting(false);
+
+    if (result.ok) {
+      setTestResult({
+        ok: true,
+        text: `连接成功 · ${result.durationMs}ms · 模型回复「${result.content.slice(0, 40)}」`,
+      });
+    } else {
+      setTestResult({
+        ok: false,
+        text: `${result.error || '连接失败'}\n请求地址：${result.requestUrl}`,
+      });
+    }
+  };
 
   const handleSaveGeneral = (e: React.FormEvent) => {
     e.preventDefault();
@@ -134,7 +169,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, defaultTa
     updateAISettings({
       useCustomAPI,
       apiKey: apiKey.trim(),
-      endpoint: endpoint.trim() || 'https://api.deepseek.com/v1',
+      endpoint: normalizeEndpoint(endpoint || 'https://api.deepseek.com/v1'),
       model: model.trim() || 'deepseek-chat',
     });
 
@@ -438,6 +473,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, defaultTa
                       className="w-full bg-white border border-sky-200 rounded-xl p-2 text-slate-800 font-mono focus:outline-none focus:border-sky-500"
                     />
                   </div>
+
+                  {/* 连通性自检：不测就永远不知道 Key / 地址对不对 */}
+                  <div className="flex items-center space-x-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleTestConnection}
+                      disabled={isTesting}
+                      className="px-3 py-1.5 bg-white border border-sky-300 text-sky-700 rounded-xl text-[11px] font-semibold hover:bg-sky-50 transition active:scale-95 disabled:opacity-50"
+                    >
+                      {isTesting ? '正在连接…' : '测试连接'}
+                    </button>
+                    <span className="text-[10px] text-slate-400">
+                      实际请求：{normalizeEndpoint(endpoint)}/chat/completions
+                    </span>
+                  </div>
+
+                  {isCleartextEndpoint(endpoint) && (
+                    <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-2 leading-relaxed">
+                      当前填写的是 http:// 明文地址。Android 默认会拦截明文 HTTP，若测试失败请改用 https:// 地址。
+                    </p>
+                  )}
+
+                  {testResult && (
+                    <p
+                      className={`text-[10px] whitespace-pre-wrap break-all rounded-xl p-2 leading-relaxed border ${
+                        testResult.ok
+                          ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                          : 'text-rose-700 bg-rose-50 border-rose-200'
+                      }`}
+                    >
+                      {testResult.ok ? '✅ ' : '❌ '}
+                      {testResult.text}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
